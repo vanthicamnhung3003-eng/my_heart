@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>I love you</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #start {
+      position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: #000; color: #e8b4bc; font: 600 20px/1.4 Georgia, serif; letter-spacing: 1px;
+      cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+    }
+    #start span { padding: 14px 28px; border: 1px solid #8b0023; border-radius: 999px; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="start"><span>Tap here to start</span></div>
+<script>
+  // ---------- Settings (same as the Python version) ----------
+const MUSIC_FILE = "love_you.mp3";            // optional: skipped silently if missing
+const BACKGROUND = "#000";
+const WORDS = ["love you", "Love You", "LOVE YOU"];
+const CENTER_TEXT = " Love You ";
+const COLORS = [                              // wine red palette
+  [178, 34, 52], [160, 20, 45], [139, 0, 35], [190, 40, 70], [150, 30, 60]
+];
+const SIZE_MULTS = [0.85, 0.95, 1.05, 1.15];
+const FRAMES_PER_STEP = 1.6;                  // frames are counted at 60 per second
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const startBtn = document.getElementById("start");
+
+let W, H, L;                                  // canvas size (device px), layout
+let particles = [], fillStart = 0, centerSprite = null;
+let t0 = null;                                // set when the user taps
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+function heartXY(t) {
+  const x = 16 * Math.pow(Math.sin(t), 3);
+  const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+  return [x, -y];
+}
+
+// Pre-render text once into a small canvas (fast to draw every frame)
+const spriteCache = new Map();
+function makeSprite(text, rgb, px, family, color) {
+  const css = color || `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+  const key = `${text}|${css}|${Math.round(px)}|${family}`;
+  if (spriteCache.has(key)) return spriteCache.get(key);
+  const c = document.createElement("canvas");
+  const g = c.getContext("2d");
+  const font = `bold ${Math.round(px)}px ${family}`;
+  g.font = font;
+  const w = Math.ceil(g.measureText(text).width) + 8;
+  const h = Math.ceil(px * 1.4);
+  c.width = w; c.height = h;
+  g.font = font;                              // resizing the canvas resets the context
+  g.fillStyle = css;
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillText(text, w / 2, h / 2);
+  spriteCache.set(key, c);
+  return c;
+}
+
+function setup() {
+  const dpr = window.devicePixelRatio || 1;
+  W = canvas.width = Math.floor(window.innerWidth * dpr);
+  H = canvas.height = Math.floor(window.innerHeight * dpr);
+  spriteCache.clear();
+
+  // Heart is ~32 units wide and ~30 units tall; fit it to any screen
+  const scale = Math.min(W / 36, H / 34);
+  L = {
+    scale, cx: W / 2, cy: H / 2 - scale * 0.5,
+    outlineFont: Math.max(10 * dpr, scale * 1.0),
+    fillFont: Math.max(9 * dpr, scale * 0.85),
+    centerFont: Math.max(24 * dpr, scale * 2.7),
+    outlineGap: scale * 1.5,
+    fillGap: scale * 2.3,
+  };
+
+  particles = [];
+  const placed = [];
+  const tooClose = (x, y, gap) => placed.some(([px, py]) => Math.hypot(x - px, y - py) < gap);
+  const add = (x, y, order, kind) => {
+    const base = kind === "outline" ? L.outlineFont : L.fillFont;
+    particles.push({
+      x, y, order, kind,
+      flicker: rand(0, Math.PI * 2),
+      sprite: makeSprite(pick(WORDS), pick(COLORS), base * pick(SIZE_MULTS), "Arial, Helvetica, sans-serif"),
+      delay: 0,
+    });
+  };
+
+  // Outline
+  const nOutline = 160;
+  for (let i = 0; i < nOutline; i++) {
+    const t = (i / nOutline) * 2 * Math.PI;
+    const [bx, by] = heartXY(t);
+    const x = bx * L.scale + L.cx, y = by * L.scale + L.cy;
+    if (tooClose(x, y, L.outlineGap)) continue;
+    placed.push([x, y]);
+    add(x, y, i, "outline");
+  }
+  const outlineSpan = Math.max(0, ...particles.map((p) => p.order));
+  fillStart = Math.floor(outlineSpan * FRAMES_PER_STEP) + 30;
+  particles.forEach((p) => (p.delay = Math.floor(p.order * FRAMES_PER_STEP)));
+
+  // Fill
+  const nFill = 130;
+  let attempts = 0, count = 0;
+  while (count < nFill && attempts < nFill * 80) {
+    attempts++;
+    const t = rand(0, 2 * Math.PI), r = rand(0, 0.86);
+    const [bx, by] = heartXY(t);
+    const x = bx * r * L.scale + L.cx, y = by * r * L.scale + L.cy;
+    if (tooClose(x, y, L.fillGap)) continue;
+    placed.push([x, y]);
+    add(x, y, Math.floor(rand(0, 321)), "fill");
+    particles[particles.length - 1].delay = fillStart + particles[particles.length - 1].order;
+    count++;
+  }
+
+  centerSprite = makeSprite(CENTER_TEXT, null, L.centerFont, "Georgia, serif", "rgb(255,250,245)");
+}
+
+function drawSprite(s, x, y, mult, alpha) {
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(s, x - (s.width * mult) / 2, y - (s.height * mult) / 2, s.width * mult, s.height * mult);
+}
+
+function render(now) {
+  requestAnimationFrame(render);
+  const frame = ((now - t0) / 1000) * 60;     // time-based, same speed on any refresh rate
+
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = BACKGROUND;
+  ctx.fillRect(0, 0, W, H);
+
+  for (const p of particles) {
+    let a = Math.min(255, Math.max(0, (frame - p.delay) * 16));
+    if (a <= 0) continue;
+    if (a >= 255) a *= 0.75 + 0.25 * Math.sin(frame * 0.04 + p.flicker);
+    if (a > 10) {
+      drawSprite(p.sprite, p.x, p.y, 2.4, a / 7 / 255);   // soft outer glow
+      drawSprite(p.sprite, p.x, p.y, 1.6, a / 3 / 255);   // inner glow
+    }
+    drawSprite(p.sprite, p.x, p.y, 1, a / 255);
+  }
+
+  const centerStart = fillStart + 200;
+  if (frame > centerStart) {
+    const progress = Math.min(1, (frame - centerStart) / 60);
+    const ca = 1 - Math.exp(-progress * 8);
+    const pulse = 1 + 0.025 * Math.sin(frame * 0.05);
+    if (ca * 255 > 10) drawSprite(centerSprite, L.cx, L.cy, pulse * 1.4, ca / 5);
+    drawSprite(centerSprite, L.cx, L.cy, pulse, ca);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Phones block autoplay: audio and animation both start on the first tap
+function begin() {
+  startBtn.style.display = "none";
+  try {
+    const audio = new Audio(MUSIC_FILE);
+    audio.play().catch(() => {});             // no file / blocked: just run silently
+  } catch (e) {}
+  t0 = performance.now();
+  requestAnimationFrame(render);
+}
+
+startBtn.addEventListener("click", begin, { once: true });
+
+let resizeTimer;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(setup, 150);       // keeps the animation time, only re-fits it
+});
+
+setup();
+</script>
+ </body>
+</html>
